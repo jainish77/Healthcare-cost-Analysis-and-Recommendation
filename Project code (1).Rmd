@@ -1,0 +1,341 @@
+---
+title: "Ds Project"
+date: "2022-12-03"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+#Librarying all the required packages
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(rsample)
+library(caret)
+library(kernlab)
+library(e1071)
+library(arules)
+library(arulesViz)
+library(imputeTS)
+library(rio)
+library(rpart)
+library(rpart.plot)
+library(shiny)
+library(shinydashboard)
+
+```
+
+
+```{r}
+# Loading the dataset
+HMO <- read_csv("https://intro-datascience.s3.us-east-2.amazonaws.com/HMO_data.csv")
+data <- HMO
+head(data)
+```
+
+
+```{r}
+# Viewing the dataframe
+#view(data)
+str(data)
+summary(data)
+```
+
+```{r}
+# cleaning the dataframe
+
+# Checking for NA values in all columns
+colSums(is.na(data))
+anyNA(data)
+# Removing NA values
+data$bmi<- na_interpolation(data$bmi)
+data$hypertension <- na_interpolation(data$hypertension)
+```
+
+```{r}
+#Checking the quantile of cost to define the expensive variable
+quantile(data$cost, probs = c(0.75))
+data$expensive <- data$cost>4775
+# replacing TRUE with 1 and FALSE with 0
+#data <- data %>% mutate( expensive = str_replace_all( string = expensive, pattern = "TRUE", "1"))
+#data <- data %>% mutate( expensive = str_replace_all( string = expensive, pattern = "FALSE", "0"))
+head(data)
+```
+
+```{r}
+#dividing expensive and inexpensive people into 2 subsets
+expensivePeople <- subset(data,expensive=="TRUE")
+inexpensivePeople <- subset(data,expensive=="FALSE") 
+head(expensivePeople)
+head(inexpensivePeople)
+
+smokerPeople <- subset(data,smoker=="yes")
+head(smokerPeople)
+
+```
+
+```{r}
+#Visualizations: Histograms
+hist(expensivePeople$age)
+hist(inexpensivePeople$age)
+hist(smokerPeople$age)
+hist(smokerPeople$bmi)
+hist(as.numeric(smokerPeople$expensive))
+hist(as.numeric(smokerPeople$hypertension))
+hist(as.numeric(inexpensivePeople$hypertension))
+
+```
+
+```{r}
+#Boxplot for cost, bmi, age, hypertension
+boxplot(data$age)
+boxplot(expensivePeople$age)
+boxplot(inexpensivePeople$bmi)
+boxplot(data$age)
+boxplot(data$hypertension)
+```
+```{r}
+#Scatterplot for Age Vs Cost
+agecost <- ggplot(data,aes(x=age, y=cost)) + geom_point()
+agecost
+```
+
+```{r}
+#Maps(Cost based on location)
+dfAgg <- data %>% group_by(location) %>% summarise(total_cost = max(cost))
+dfAgg$state <- tolower(dfAgg$location)
+us <- map_data("state")
+us$state <- us$region
+mergedNew <- merge(dfAgg,us,on = "state")
+mergedNew <- mergedNew[order(mergedNew$order),]
+map <- ggplot(mergedNew) + geom_polygon(aes(x = long, y = lat, group = group,fill = total_cost), color = "black") 
+map + scale_fill_continuous(low = "white", high = "purple", name = "total_cost", label = scales::comma) + coord_map() +ggtitle(" Mappping the maximum cost per state for the expensive and non expensive people")
+```
+
+
+```{r}
+#Maps(Avg age based on location)
+dfAgg <- data %>% group_by(location) %>% summarise(avgage = mean(age))
+dfAgg$state <- tolower(dfAgg$location)
+us <- map_data("state")
+us$state <- us$region
+mergedNew <- merge(dfAgg,us,on = "state")
+mergedNew <- mergedNew[order(mergedNew$order),]
+map <- ggplot(mergedNew) + geom_polygon(aes(x = long, y = lat, group = group,fill = avgage), color = "black") 
+map + scale_fill_continuous(low = "white", high = "orange", name = "avgage", label = scales::comma) + coord_map() +ggtitle(" Mappping the maximum cost per state for the expensive and non expensive people")
+
+```
+
+```{r}
+#Scatterplot for Bmi Vs Cost
+bmicost <- ggplot(data,aes(x=bmi, y=cost)) + geom_point()
+bmicost
+
+```
+
+```{r}
+#Scatterplot for Hypertension Vs Cost
+hypertensioncost <- ggplot(data,aes(x=hypertension, y=cost)) + geom_point()
+hypertensioncost
+```
+
+
+```{r}
+#barplot for expensive count
+expensivePlot <- ggplot(data,aes(x=expensive)) + geom_bar() + ggtitle("Expensive Count")
+expensivePlot
+```
+
+```{r}
+#Bar plot for Age vs Expensive and Inexpensive people
+ggplot(inexpensivePeople, aes(x=age,y=cost))+geom_point() + ggtitle("Age Vs Cost of Inexpensive People")
+ggplot(expensivePeople, aes(x=age,y=cost))+geom_point() + ggtitle("Age Vs Cost of Expensive People")
+```
+
+```{r}
+#Checking the quantile of cost to define the expensive variable
+quantile(data$cost, probs = c(0.75))
+data$expensive <- data$cost>4775
+head(data)
+```
+
+```{r}
+
+#creating a new data frame
+hmoData <- data.frame(age = data$age,
+                      bmi = data$bmi,
+                      smoker= data$smoker,
+                      yearly_physical= data$yearly_physical,
+                      exercise =data$exercise,
+                      hypertension = data$hypertension,
+                      expensive=as.factor(data$expensive))
+
+# replacing TRUE with 1 and FALSE with 0
+hmoData <- hmoData %>% mutate( expensive = str_replace_all( string = expensive, pattern = "TRUE", "1"))
+hmoData <- hmoData %>% mutate( expensive = str_replace_all( string = expensive, pattern = "FALSE", "0"))
+hmoData$expensive <- as.factor(hmoData$expensive)
+str(hmoData)
+```
+
+```{r}
+# Spliting data into training and testing sets for svm
+trainListS <- createDataPartition(y=hmoData$expensive,p=0.80,list=FALSE)
+trainSetS <- hmoData[trainListS,]
+testSetS <- hmoData[-trainListS,]
+dim(trainSetS)
+dim(testSetS)
+```
+
+```{r}
+# Spliting data into training and testing sets for Rpart
+trainList <- createDataPartition(y=data$expensive,p=0.80,list=FALSE)
+trainSet <- data[trainList,]
+testSet <- data[-trainList,]
+data$expensive <- as.factor(data$expensive)
+dim(trainSet)
+dim(testSet)
+```
+
+```{r}
+# Building SVM model
+set.seed(123)
+ksvm_model <- ksvm(data= trainSetS, expensive~.,C=5, CV=3, prob.model= TRUE)
+svmPred<- predict(ksvm_model,newdata= testSetS, type= "response")
+head(svmPred)
+str(svmPred)
+
+# Checking accuracy of ksvm model using confusion matrix
+confusionMatrix(svmPred,as.factor(testSetS$expensive))
+```
+
+```{r}
+# Building a tree model
+rpart_model <- rpart(expensive ~ age+bmi+children+smoker+hypertension+exercise+yearly_physical, data = trainSet, method = "class")
+rpartPred <- predict(rpart_model, newdata= testSet, type= "class")
+# str(rpart_model)
+# str(as.factor(testSet$expensive))
+# head(rpartPred)
+confusionMatrix(rpartPred, as.factor(testSet$expensive))
+```
+
+```{r}
+# Linear model
+trainSet$expensive<-as.numeric(trainSet$expensive)
+testSet$expensive<-as.numeric(testSet$expensive)
+lmOut <- lm(expensive~age+bmi+children+smoker+hypertension+exercise+yearly_physical,data=trainSet)
+summary(lmOut)
+#predict(lmOut,testSet,type = 'response')
+```
+
+```{r}
+# unsupervised : Apriori algorithm 
+
+# coverting to sparse transaction matrix
+dataX <- hmoData
+dataX<-as(dataX,'transactions') 
+
+itemFrequency(dataX)
+itemFrequencyPlot(dataX)
+```
+
+```{r} 
+# defining rules
+ruleset <- apriori(dataX,
+parameter=list(supp=0.040, conf=0.71),
+control=list(verbose=F),
+appearance=list(default="lhs",rhs=("expensive=1")))
+
+summary(ruleset)
+
+
+# parameter=list(supp=0.040, conf=0.9) 10 values
+```
+
+```{r}
+inspect(ruleset)
+```
+
+```{r}
+# shinny app
+best_model2 <- rpart_model
+saveRDS(best_model2,file="/Users/maitreyiahire/Documents/DS Project/best_model2.rds")
+readRDS(file="/Users/maitreyiahire/Documents/DS Project/best_model2.rds")
+```
+
+```{r}
+library(shiny)
+library(caret)
+library(kernlab) 
+library(e1071)
+library(tidyverse)
+ui <- fluidPage (
+  #Read the data
+  fileInput("upload", label="Insert input file", accept = c(".csv")),
+  #Read the actual (solution) data
+  fileInput("upload_Solution", label="Insert solution file", accept = c(".csv")),
+  #get a number (how much of the dataframe to show)
+  numericInput("n", "Number of Rows", value = 10, min = 1, step = 1),
+  #a place to output a table (i.e., a dataframe)
+  tableOutput("headForDF"),
+  #output the results (for now, just simple text)
+  verbatimTextOutput("txt_results", placeholder = TRUE)
+)
+
+server <- function(input, output, session) {
+  #load a model, do prediction and compute the confusion matrix
+  use_model_to_predict <- function(df, df_solution){
+ 
+    my_model <- readRDS("/Users/maitreyiahire/Documents/DS Project/best_model2.rds")
+    
+    print('enter')
+    P <- predict(my_model, df, type = "class")
+    #show how the model performed
+    print(P)
+    
+    confusionMatrix(P, as.factor(df_solution$expensive))
+  }
+  #require an input file, then read a CSV file
+  getTestData <- reactive({ 
+    req(input$upload)
+    read_csv(input$upload$name)
+  })
+  #require an the actual values for the prediction (i.e. solution file)
+  getSolutionData <- reactive({ 
+    req(input$upload_Solution)
+    read_csv(input$upload_Solution$name) 
+  })
+  output$txt_results <- renderPrint({
+    #load the data
+    dataset <- getTestData() 
+    dataset_solution <- getSolutionData()
+    #load and use the model on the new data
+    use_model_to_predict(dataset, dataset_solution)
+  })
+  #show a few lines of the dataframe
+  output$headForDF <- renderTable({
+    df <- getTestData()
+    head(df, input$n)
+  })
+}
+shinyApp(ui, server)
+```
+
+```{r}
+#Maps(Avg age based on location)
+data <- data %>% mutate( smoker = str_replace_all( string = smoker, pattern = "yes", "1"))
+data <- data %>% mutate( smoker = str_replace_all( string = smoker, pattern = "no", "0"))
+data$smoker <- as.numeric(data$smoker)
+dfAgg <- data %>% group_by(location) %>% summarise(avgsmokers = mean(smoker))
+dfAgg$state <- tolower(dfAgg$location)
+us <- map_data("state")
+us$state <- us$region
+mergedNew <- merge(dfAgg,us,on = "state")
+mergedNew <- mergedNew[order(mergedNew$order),]
+map <- ggplot(mergedNew) + geom_polygon(aes(x = long, y = lat, group = group,fill = avgsmokers), color = "black") 
+map + scale_fill_continuous(low = "white", high = "blue", name = "avgsmokers", label = scales::comma) + coord_map() +ggtitle(" Mappping the average smokers per state ")
+```
+
+```{r}
+
+```
